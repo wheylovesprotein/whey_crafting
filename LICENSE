@@ -1,0 +1,32 @@
+whey_crafting License
+
+Copyright (c) 2026 wheylovesprotein
+
+Permission is granted, free of charge, to any person obtaining a copy of this
+software and its files (the "Software") to use, copy and modify the Software,
+subject to the following conditions:
+
+1. Free use. You may run the Software on any FiveM server, including servers
+   that accept donations or sell other products, at no cost.
+
+2. No resale. You may not sell, rent, lease or sublicense the Software or any
+   modified version of it, and you may not put it behind a paywall, a paid
+   membership, a paid download or a paid bundle, in whole or in part.
+
+3. Sharing. You may share the Software and your modified versions of it for
+   free, as long as this license and the copyright notice above stay in every
+   copy, and you do not claim the original work as your own.
+
+4. No removal of credit. The author name in fxmanifest.lua and this license
+   file must stay in place in every copy and modified version.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The bundled Montserrat font (web/src/assets/montserrat.woff2) is licensed
+separately under the SIL Open Font License, see
+web/src/assets/montserrat-LICENSE.txt.
