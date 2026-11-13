@@ -1,7 +1,7 @@
 import {
-  Box,
   Check,
   FolderPlus,
+  Gauge,
   Hammer,
   Layers,
   MapPin,
@@ -10,27 +10,29 @@ import {
   Plus,
   RotateCcw,
   ScrollText,
+  Search,
   Trash2,
   X,
 } from 'lucide-react';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { limits } from '../init';
+import { levelConfig, limits } from '../init';
 import { locale } from '../locale';
 import { itemImage, nui } from '../nui';
 import { useTablet } from './context';
 import { itemOption, useItems } from './items';
 
 import type {
+  BenchModel,
   CraftingBench,
   CraftingCategory,
   CraftingCooldown,
   CraftingData,
   CraftingIngredient,
-  CraftingProp,
   CraftingRecipe,
   CraftingType,
   GangOption,
+  LevelEntry,
   Vec3,
 } from '../types';
 
@@ -54,7 +56,7 @@ import { arr, cls } from '../util';
 
 const NEW_DURATION = 10;
 const COORDS_MS = 3000;
-const MAX_PROP_ROWS = 200;
+const SEARCH_MIN_LENGTH = 2;
 
 type Load = { kind: 'loading' } | { kind: 'failed' } | { kind: 'ready'; data: CraftingData };
 type Mutate = (action: string, payload: Record<string, unknown>) => Promise<boolean>;
@@ -67,6 +69,8 @@ interface Draft {
   blueprint: string | null;
   limit: number;
   hours: number;
+  xp: number | null;
+  level: number;
   category: number | null;
   ingredients: CraftingIngredient[];
 }
@@ -91,6 +95,7 @@ type BenchDialog =
 interface BenchOptions {
   types: Option<string>[];
   gangs: Option<string>[];
+  models: Option<string>[];
 }
 
 function toCooldown(value: unknown): CraftingCooldown | null {
@@ -115,13 +120,15 @@ const fixData = (raw: CraftingData): CraftingData => ({
       recipes: arr<CraftingRecipe>(c.recipes).map((r) => ({
         ...r,
         cooldown: toCooldown(r.cooldown),
+        xp: typeof r.xp === 'number' ? r.xp : null,
+        level: typeof r.level === 'number' && r.level > 1 ? r.level : null,
         ingredients: arr<CraftingIngredient>(r.ingredients),
       })),
     })),
   })),
   tables: arr<CraftingBench>(raw.tables).map((b) => ({ ...b, gangs: arr<string>(b.gangs) })),
-  props: arr<CraftingProp>(raw.props),
   gangs: arr<GangOption>(raw.gangs),
+  models: arr<BenchModel>(raw.models),
 });
 
 const plural = (n: number, key: string, ...rest: (string | number)[]) =>
@@ -139,6 +146,8 @@ const blank = (category: number | null): Draft => ({
   blueprint: null,
   limit: 0,
   hours: 0,
+  xp: null,
+  level: 0,
   category,
   ingredients: [],
 });
@@ -150,6 +159,8 @@ const toDraft = (r: CraftingRecipe): Draft => ({
   blueprint: r.blueprint || null,
   limit: r.cooldown?.limit ?? 0,
   hours: r.cooldown?.hours ?? 0,
+  xp: r.xp ?? null,
+  level: r.level ?? 0,
   category: null,
   ingredients: r.ingredients,
 });
@@ -161,6 +172,8 @@ const same = (a: Draft, b: Draft) =>
   a.blueprint === b.blueprint &&
   a.limit === b.limit &&
   a.hours === b.hours &&
+  a.xp === b.xp &&
+  a.level === b.level &&
   a.category === b.category &&
   a.ingredients.length === b.ingredients.length &&
   a.ingredients.every((i, n) => i.item === b.ingredients[n].item && i.count === b.ingredients[n].count);
@@ -239,6 +252,10 @@ function problem({
 
   if (draft.hours > 0 && draft.limit < 1) {
     return locale('ui_issue_limit');
+  }
+
+  if (draft.level > levelConfig.maxLevel) {
+    return locale('ui_issue_level', levelConfig.maxLevel);
   }
 
   if (target === null || !type.categories[target]) {
@@ -332,7 +349,7 @@ export default function Manager() {
 
 function Recipes({ data, mutate }: { data: CraftingData; mutate: Mutate }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [showProps, setShowProps] = useState(false);
+  const [page, setPage] = useState<'types' | 'levels'>('types');
   const type = data.types.find((t) => t.name === selected) ?? null;
 
   const benches = useMemo(() => {
@@ -351,8 +368,9 @@ function Recipes({ data, mutate }: { data: CraftingData; mutate: Mutate }) {
     () => ({
       types: data.types.map((t) => ({ value: t.name, label: t.label, hint: t.name })),
       gangs: data.gangs.filter((g) => g.name !== 'none').map((g) => ({ value: g.name, label: g.label })),
+      models: data.models.map((m) => ({ value: m.model, label: m.label, hint: m.model })),
     }),
-    [data.types, data.gangs],
+    [data.types, data.gangs, data.models],
   );
 
   if (selected !== null && type === null) {
@@ -361,7 +379,7 @@ function Recipes({ data, mutate }: { data: CraftingData; mutate: Mutate }) {
 
   const select = (name: string) => {
     setSelected(name);
-    setShowProps(false);
+    setPage('types');
   };
 
   const create = async (name: string, label: string) => {
@@ -374,9 +392,9 @@ function Recipes({ data, mutate }: { data: CraftingData; mutate: Mutate }) {
     return ok;
   };
 
-  const openProps = () => {
+  const openLevels = () => {
     setSelected(null);
-    setShowProps(true);
+    setPage('levels');
   };
 
   return (
@@ -390,12 +408,11 @@ function Recipes({ data, mutate }: { data: CraftingData; mutate: Mutate }) {
         onSelect={select}
         onCreate={create}
         mutate={mutate}
-        propCount={data.props.length}
-        propsOpen={showProps}
-        onProps={openProps}
+        levelsOpen={page === 'levels'}
+        onLevels={openLevels}
       />
-      {showProps ? (
-        <Props props={data.props} mutate={mutate} />
+      {page === 'levels' ? (
+        <Levels />
       ) : type ? (
         <Workspace
           key={type.name}
@@ -431,9 +448,8 @@ function TypeList({
   onSelect,
   onCreate,
   mutate,
-  propCount,
-  propsOpen,
-  onProps,
+  levelsOpen,
+  onLevels,
 }: {
   types: CraftingType[];
   benches: Map<string, CraftingBench[]>;
@@ -443,9 +459,8 @@ function TypeList({
   onSelect(name: string): void;
   onCreate(name: string, label: string): Promise<boolean>;
   mutate: Mutate;
-  propCount: number;
-  propsOpen: boolean;
-  onProps(): void;
+  levelsOpen: boolean;
+  onLevels(): void;
 }) {
   const [creating, setCreating] = useState(false);
 
@@ -463,12 +478,14 @@ function TypeList({
       }
       bodyClassName="flush scroll"
     >
-      <button type="button" className={cls('plist-row', propsOpen && 'is-active')} onClick={onProps}>
-        <span className="plist-main">
-          <span className="plist-name">{locale('ui_props')}</span>
-          <span className="plist-sub">{plural(propCount, 'ui_placed_prop')}</span>
-        </span>
-      </button>
+      {levelConfig.enabled && (
+        <button type="button" className={cls('plist-row', levelsOpen && 'is-active')} onClick={onLevels}>
+          <span className="plist-main">
+            <span className="plist-name">{locale('ui_levels')}</span>
+            <span className="plist-sub">{locale('ui_levels_sub')}</span>
+          </span>
+        </button>
+      )}
       {types.length === 0 && <Empty icon={Hammer}>{locale('ui_no_types')}</Empty>}
       {types.map((t) => (
         <button
@@ -566,6 +583,8 @@ function Workspace({
       ingredients: draft.ingredients,
       ...(draft.blueprint ? { blueprint: draft.blueprint } : {}),
       ...(draft.limit > 0 && draft.hours > 0 ? { cooldown: { limit: draft.limit, hours: draft.hours } } : {}),
+      ...(draft.xp !== null ? { xp: draft.xp } : {}),
+      ...(draft.level > 1 ? { level: draft.level } : {}),
     };
 
     const ok = await save({
@@ -820,6 +839,7 @@ function TypePanel({
                     {locale('ui_recipe_summary', r.count.toLocaleString(), r.duration.toLocaleString())}
                     {r.cooldown &&
                       ` · ${locale('ui_recipe_cooldown', r.cooldown.limit.toLocaleString(), r.cooldown.hours)}`}
+                    {levelConfig.enabled && r.level && ` · ${locale('ui_level_short', r.level)}`}
                   </span>
                 </button>
               ))
@@ -961,6 +981,28 @@ function Editor({
           />
         </Field>
       </div>
+      {levelConfig.enabled && (
+        <div className="form-2">
+          <Field label={locale('ui_xp_per_craft')}>
+            <input
+              className="input input--sm"
+              inputMode="numeric"
+              placeholder={locale('ui_xp_default', levelConfig.defaultXp)}
+              value={draft.xp ?? ''}
+              onChange={(e) => update({ xp: /\d/.test(e.target.value) ? digits(e.target.value, limits.xp) : null })}
+            />
+          </Field>
+          <Field label={locale('ui_required_level')}>
+            <input
+              className="input input--sm"
+              inputMode="numeric"
+              placeholder={locale('ui_none')}
+              value={draft.level || ''}
+              onChange={(e) => update({ level: digits(e.target.value, limits.level) })}
+            />
+          </Field>
+        </div>
+      )}
       <Field label={locale('ui_blueprint')}>
         <div className="craft-pick">
           <Combobox
@@ -1209,13 +1251,16 @@ function BenchGroup({
           </div>
         ))
       )}
-      {dialog?.kind === 'place' && place && <PlaceDialog type={place} gangs={options.gangs} onClose={close} />}
+      {dialog?.kind === 'place' && place && (
+        <PlaceDialog type={place} gangs={options.gangs} models={options.models} onClose={close} />
+      )}
       {dialog?.kind === 'edit' && (
         <EditBench
           bench={dialog.bench}
           types={options.types}
           gangs={options.gangs}
-          onSave={(type, gangs) => mutate('updateTable', { id: dialog.bench.id, type, gangs })}
+          models={options.models}
+          onSave={(type, gangs, model) => mutate('updateTable', { id: dialog.bench.id, type, gangs, model })}
           onClose={close}
         />
       )}
@@ -1233,181 +1278,159 @@ function BenchGroup({
   );
 }
 
-function Props({ props, mutate }: { props: CraftingProp[]; mutate: Mutate }) {
-  const { run } = useTablet();
-  const me = useMyCoords(props.length > 0);
-  const [filter, setFilter] = useState<string | null>(null);
-  const [creating, setCreating] = useState<string | null>(null);
+function Levels() {
+  const { query } = useTablet();
+  const [results, setResults] = useState<LevelEntry[] | null>(null);
+  const [picked, setPicked] = useState<LevelEntry | null>(null);
+  const [term, setTerm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const ready = term.trim().length >= SEARCH_MIN_LENGTH;
 
-  const models = useMemo(() => {
-    const counts = new Map<string, number>();
+  const search = async () => {
+    if (!ready || busy) return;
 
-    for (const p of props) {
-      counts.set(p.model, (counts.get(p.model) ?? 0) + 1);
+    setBusy(true);
+
+    const found = await query<LevelEntry[]>('searchLevels', { term: term.trim() });
+
+    setBusy(false);
+
+    if (found !== null || results === null) {
+      setResults(arr<LevelEntry>(found));
     }
+  };
 
-    return [...counts].sort(([a], [b]) => a.localeCompare(b));
-  }, [props]);
+  const save = async (level: number) => {
+    if (!picked) return false;
 
-  if (filter !== null && !models.some(([model]) => model === filter)) {
-    setFilter(null);
-  }
+    const updated = await query<LevelEntry>('setLevel', { citizenid: picked.citizenid, level });
 
-  const shown = props.filter((p) => filter === null || p.model === filter);
+    if (!updated) return false;
 
-  const rows = shown
-    .map((prop) => ({ prop, metres: me && distanceBetween(me, prop.coords) }))
-    .sort((a, b) => (a.metres ?? 0) - (b.metres ?? 0))
-    .slice(0, MAX_PROP_ROWS);
+    setPicked(updated);
+    setResults((list) => list && list.map((p) => (p.citizenid === updated.citizenid ? updated : p)));
+
+    return true;
+  };
 
   return (
     <>
-      <Card
-        title={
-          <>
-            {locale('ui_props')} <span className="title-count">{props.length}</span>
-          </>
-        }
-        actions={
-          <Button size="sm" variant="ghost" icon={Plus} onClick={() => setCreating('')}>
-            {locale('ui_create_prop')}
+      <Card title={locale('ui_find_player')} bodyClassName="flush craft-levels">
+        <div className="craft-level-search">
+          <input
+            autoFocus
+            className="input input--sm"
+            placeholder={locale('ui_search_players')}
+            maxLength={limits.key}
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && search()}
+          />
+          <Button size="sm" variant="ghost" icon={Search} disabled={!ready} loading={busy} onClick={search}>
+            {locale('ui_search_go')}
           </Button>
-        }
-        bodyClassName="flush scroll"
-      >
-        {models.length === 0 && <Empty icon={Box}>{locale('ui_no_props')}</Empty>}
-        {models.map(([model, count]) => (
-          <div key={model} className="craft-prop-model">
+        </div>
+        <div className="scroll grow">
+          {results === null && <Empty icon={Gauge}>{locale('ui_search_hint')}</Empty>}
+          {results?.length === 0 && <Empty icon={Gauge}>{locale('ui_no_results')}</Empty>}
+          {results?.map((p) => (
             <button
+              key={p.citizenid}
               type="button"
-              className={cls('plist-row', model === filter && 'is-active')}
-              onClick={() => setFilter(model === filter ? null : model)}
+              className={cls('plist-row', p.citizenid === picked?.citizenid && 'is-active')}
+              onClick={() => setPicked(p)}
             >
               <span className="plist-main">
-                <span className="plist-name mono">{model}</span>
-                <span className="plist-sub">{locale('ui_n_placed', count.toLocaleString())}</span>
+                <span className="plist-name">{p.name}</span>
+                <span className="plist-sub mono">{p.citizenid}</span>
               </span>
+              <span className="plist-ping">{locale('ui_level_n', p.level)}</span>
             </button>
-            <button type="button" className="tiny-btn owned-btn" title={locale('ui_place_more')} onClick={() => setCreating(model)}>
-              <Plus size={13} />
-            </button>
-          </div>
-        ))}
+          ))}
+        </div>
       </Card>
-      <Card
-        title={filter ?? locale('ui_nearest_props')}
-        actions={shown.length > rows.length && <Pill tone="muted">{locale('ui_nearest_n', rows.length)}</Pill>}
-        bodyClassName="flush scroll"
-      >
-        {rows.length === 0 && (
-          <Empty icon={Box} className="fill">
-            {locale('ui_create_prop_hint')}
+      {picked ? (
+        <LevelEditor key={`${picked.citizenid}:${picked.level}`} player={picked} onSave={save} />
+      ) : (
+        <Card>
+          <Empty icon={Gauge} className="fill">
+            {locale('ui_pick_player')}
           </Empty>
-        )}
-        {rows.map(({ prop, metres }) => (
-          <div key={prop.id} className="craft-bench">
-            <span className="craft-id">#{prop.id}</span>
-            <span className="craft-bench-main mono">{prop.model}</span>
-            <span className="craft-distance">{metres === null ? '…' : distanceText(metres)}</span>
-            <button
-              type="button"
-              className="tiny-btn owned-btn"
-              title={locale('ui_teleport')}
-              onClick={() => run('teleportProp', { id: prop.id })}
-            >
-              <MapPin size={13} />
-            </button>
-            <ConfirmButton
-              size="sm"
-              variant="ghost"
-              icon={Trash2}
-              confirmText={locale('ui_remove_confirm')}
-              aria-label={locale('ui_remove_prop_x', prop.id)}
-              onConfirm={() => mutate('deleteProp', { id: prop.id })}
-            />
-          </div>
-        ))}
-      </Card>
-      {creating !== null && (
-        <CreatePropDialog
-          initial={creating}
-          known={models.map(([model]) => model)}
-          onClose={() => setCreating(null)}
-        />
+        </Card>
       )}
     </>
   );
 }
 
-function CreatePropDialog({ initial, known, onClose }: { initial: string; known: string[]; onClose(): void }) {
-  const { run } = useTablet();
-  const [model, setModel] = useState(initial);
+function LevelEditor({ player, onSave }: { player: LevelEntry; onSave(level: number): Promise<boolean> }) {
+  const [level, setLevel] = useState(player.level);
   const [busy, setBusy] = useState(false);
-  const clean = model.trim().toLowerCase();
-  const ready = /^[a-z0-9_-]+$/.test(clean);
+  const valid = level >= 1 && level <= levelConfig.maxLevel;
+  const progress = locale('ui_xp_progress', player.xp.toLocaleString(), player.next.toLocaleString());
 
-  const go = async () => {
-    if (!ready || busy) return;
+  const save = async () => {
+    if (!valid || busy) return;
 
     setBusy(true);
-
-    const ok = await run('placeProp', { model: clean });
-
+    await onSave(level);
     setBusy(false);
-
-    if (ok) {
-      onClose();
-    }
   };
 
   return (
-    <Modal
-      title={locale('ui_create_prop')}
-      onClose={onClose}
-      foot={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            {locale('ui_cancel')}
-          </Button>
-          <Button variant="primary" icon={Box} disabled={!ready} loading={busy} onClick={go}>
-            {locale('ui_start_placing')}
-          </Button>
-        </>
-      }
-    >
-      <Field label={locale('ui_prop_model')}>
+    <Card title={player.name} bodyClassName="craft-editor">
+      <div className="form-2">
+        <Field label={locale('ui_citizenid')}>
+          <input className="input input--sm mono" readOnly value={player.citizenid} />
+        </Field>
+        <Field label={locale('ui_current_level')}>
+          <input
+            className="input input--sm"
+            readOnly
+            value={`${player.level} · ${player.next > 0 ? progress : locale('ui_max_level')}`}
+          />
+        </Field>
+      </div>
+      <Field label={locale('ui_new_level', levelConfig.maxLevel)}>
         <input
-          autoFocus
-          className="input mono"
-          list="craft-prop-models"
-          placeholder={locale('ui_prop_model_example')}
-          maxLength={limits.model}
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && go()}
+          className={cls('input', !valid && 'is-invalid')}
+          inputMode="numeric"
+          value={level || ''}
+          onChange={(e) => setLevel(digits(e.target.value, limits.level))}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
         />
-        <datalist id="craft-prop-models">
-          {known.map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
       </Field>
-      <p className="hint">
-        {locale('ui_prop_hint')}
-      </p>
-    </Modal>
+      <p className="hint">{locale('ui_level_hint')}</p>
+      <span className="grow" />
+      <div className="craft-foot">
+        <span className="grow" />
+        <Button variant="primary" icon={Check} disabled={!valid} loading={busy} onClick={save}>
+          {locale('ui_set_level')}
+        </Button>
+      </div>
+    </Card>
   );
 }
 
-function PlaceDialog({ type, gangs, onClose }: { type: CraftingType; gangs: Option<string>[]; onClose(): void }) {
+function PlaceDialog({
+  type,
+  gangs,
+  models,
+  onClose,
+}: {
+  type: CraftingType;
+  gangs: Option<string>[];
+  models: Option<string>[];
+  onClose(): void;
+}) {
   const { run } = useTablet();
   const [locked, setLocked] = useState<string[]>([]);
+  const [model, setModel] = useState<string | null>(models[0]?.value ?? null);
   const [busy, setBusy] = useState(false);
 
   const place = async () => {
     setBusy(true);
 
-    const ok = await run('place', { type: type.name, gangs: locked });
+    const ok = await run('place', { type: type.name, gangs: locked, ...(model ? { model } : {}) });
 
     setBusy(false);
 
@@ -1431,6 +1454,11 @@ function PlaceDialog({ type, gangs, onClose }: { type: CraftingType; gangs: Opti
         </>
       }
     >
+      {models.length > 1 && (
+        <Field label={locale('ui_bench_prop')}>
+          <Select value={model} options={models} onChange={setModel} />
+        </Field>
+      )}
       <Field label={locale('ui_gang_lock')}>
         <MultiSelect value={locked} options={gangs} onChange={setLocked} placeholder={locale('ui_anyone_can_use')} />
       </Field>
@@ -1445,17 +1473,21 @@ function EditBench({
   bench,
   types,
   gangs,
+  models,
   onSave,
   onClose,
 }: {
   bench: CraftingBench;
   types: Option<string>[];
   gangs: Option<string>[];
-  onSave(type: string, gangs: string[]): Promise<boolean>;
+  models: Option<string>[];
+  onSave(type: string, gangs: string[], model?: string): Promise<boolean>;
   onClose(): void;
 }) {
+  const current = bench.model ?? models[0]?.value ?? null;
   const [type, setType] = useState(bench.type);
   const [locked, setLocked] = useState(bench.gangs);
+  const [model, setModel] = useState(current);
   const [busy, setBusy] = useState(false);
 
   const options = [
@@ -1465,13 +1497,21 @@ function EditBench({
 
   const valid = types.some((t) => t.value === type);
 
+  const modelOptions =
+    current && !models.some((m) => m.value === current) ? [...models, { value: current, label: current }] : models;
+
+  const modelChanged = model !== current && models.some((m) => m.value === model);
+
   const changed =
-    type !== bench.type || locked.length !== bench.gangs.length || locked.some((g) => !bench.gangs.includes(g));
+    modelChanged ||
+    type !== bench.type ||
+    locked.length !== bench.gangs.length ||
+    locked.some((g) => !bench.gangs.includes(g));
 
   const save = async () => {
     setBusy(true);
 
-    const ok = await onSave(type, locked);
+    const ok = await onSave(type, locked, modelChanged && model ? model : undefined);
 
     setBusy(false);
 
@@ -1498,6 +1538,11 @@ function EditBench({
       <Field label={locale('ui_bench_type')}>
         <Select value={type} options={types} onChange={setType} placeholder={locale('ui_pick_type')} />
       </Field>
+      {modelOptions.length > 1 && (
+        <Field label={locale('ui_bench_prop')}>
+          <Select value={model} options={modelOptions} onChange={setModel} />
+        </Field>
+      )}
       <Field label={locale('ui_gang_lock')}>
         <MultiSelect value={locked} options={options} onChange={setLocked} placeholder={locale('ui_anyone')} />
       </Field>

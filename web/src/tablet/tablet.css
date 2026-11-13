@@ -1381,16 +1381,25 @@ body,
 .stage .craft-orphans {
   padding: 12px;
 }
-.stage .craft-prop-model {
+.stage .craft-levels {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.stage .craft-levels > .scroll {
+  min-height: 0;
+}
+.stage .craft-level-search {
+  flex: none;
   display: flex;
   align-items: center;
-  padding-right: 7px;
+  gap: 8px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
 }
-.stage .craft-prop-model .plist-row {
+.stage .craft-level-search .input {
   flex: 1;
   min-width: 0;
-  border-bottom: 0;
 }
 .stage .craft-modal:focus {
   outline: none;

@@ -1,4 +1,4 @@
--- Who can open the tablet, edit recipes and place or remove benches and props.
+-- Who can open the tablet, edit recipes and place or remove benches.
 -- A player is allowed when ANY of the checks below passes. The server checks this on every action.
 return {
     -- The ACE permission that grants access. Give it to anyone in server.cfg with:

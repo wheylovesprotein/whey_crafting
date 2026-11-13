@@ -7,13 +7,18 @@ local limits = require 'shared.limits'
 local db = require 'server.db'
 local permissions = require 'server.permissions'
 local itemList = require 'server.items'
+local levels = require 'server.levels'
 
 local MAX_UNWEIGHTED_AMOUNT = 9999
 local TYPES_BYTES_PER_SECOND = 200000
 local KEY_PATTERN = '^[a-z0-9_]+$'
 local COOLDOWN_LOAD_LIMIT = 100000
 local QUEUE_LOAD_LIMIT = 100000
-local MODEL_PATTERN = '^[%w_%-]+$'
+local CITIZENID_PATTERN = '^[%w_%-]+$'
+local MAX_ORDER_XP = 2000000000
+local SEARCH_MIN_LENGTH = 2
+local SEARCH_LIMIT = 25
+local DISCORD_ID_LENGTH = 15
 local STARTING_UP = locale('starting_up')
 
 local ready = false
@@ -26,9 +31,22 @@ local cooldowns = {}
 local savingCooldowns = {}
 local pendingPlacement = {}
 local busy = {}
-local props = {}
-local propCount = 0
-local pendingProps = {}
+
+local benchModels = {}
+
+for i, entry in ipairs(stations.models or {}) do
+    benchModels[i] = { model = entry.model, label = entry.label or entry.model }
+end
+
+local function isBenchModel(name)
+    for i = 1, #benchModels do
+        if benchModels[i].model == name then
+            return true
+        end
+    end
+
+    return false
+end
 
 local function log(event, data)
     if config.debug then
@@ -206,6 +224,30 @@ local function sanitiseRecipe(recipe, checkItems)
         end
     end
 
+    local xp
+
+    if recipe.xp ~= nil then
+        xp = wholeNumber(recipe.xp, 0, limits.xp)
+
+        if not xp then
+            return nil, locale('recipe_xp_range', limits.xp)
+        end
+    end
+
+    local level
+
+    if recipe.level ~= nil then
+        level = wholeNumber(recipe.level, 1, limits.level)
+
+        if not level then
+            return nil, locale('recipe_level_range', limits.level)
+        end
+
+        if level == 1 then
+            level = nil
+        end
+    end
+
     local ingredients, err = sanitiseIngredients(recipe.ingredients or {}, checkItems)
 
     if not ingredients then
@@ -218,6 +260,8 @@ local function sanitiseRecipe(recipe, checkItems)
         duration = duration,
         blueprint = blueprint,
         cooldown = cooldown,
+        xp = xp,
+        level = level,
         ingredients = ingredients,
     }
 end
@@ -386,16 +430,6 @@ local function getTableList()
         if types[craftTable.type] then
             list[#list + 1] = craftTable
         end
-    end
-
-    return list
-end
-
-local function getPropList()
-    local list = {}
-
-    for _, prop in pairs(props) do
-        list[#list + 1] = prop
     end
 
     return list
@@ -614,23 +648,6 @@ local function refundCooldown(citizenid, entry)
     saveCooldown(citizenid, entry.item)
 end
 
-local function loadProps()
-    local rows = MySQL.query.await(db.queries.loadProps, { limits.props })
-
-    for i = 1, #rows do
-        local row = rows[i]
-
-        props[row.id] = {
-            id = row.id,
-            model = row.model,
-            coords = vec3(row.x, row.y, row.z),
-            heading = row.heading + 0.0,
-        }
-    end
-
-    propCount = #rows
-end
-
 local function queueFor(citizenid, tableId)
     local byTable = queues[citizenid]
 
@@ -672,6 +689,7 @@ local function loadQueues()
             readyAt = row.ready_at,
             ingredients = ingredients,
             cooldownStart = row.cooldown_start,
+            xp = row.xp or 0,
         }
     end
 
@@ -698,6 +716,7 @@ MySQL.ready(function()
             heading = row.heading + 0.0,
             type = row.type,
             gangs = decodeGangs(row.gangs),
+            model = row.model,
         }
 
         if not types[row.type] then
@@ -708,7 +727,6 @@ MySQL.ready(function()
     end
 
     warnMissingItems()
-    loadProps()
 
     if not pcall(function() return inventory.Save end) then
         lib.print.error('ox_inventory has no Save export, so a crash can duplicate or lose crafting items')
@@ -717,7 +735,6 @@ MySQL.ready(function()
     ready = true
     broadcastTypes()
     TriggerClientEvent('whey_crafting:client:setTables', -1, getTableList())
-    TriggerLatentClientEvent('whey_crafting:client:setProps', -1, TYPES_BYTES_PER_SECOND, getPropList())
 end)
 
 lib.callback.register('whey_crafting:server:getTables', function()
@@ -726,14 +743,6 @@ lib.callback.register('whey_crafting:server:getTables', function()
     end
 
     return getTableList(), types
-end)
-
-lib.callback.register('whey_crafting:server:getProps', function(source)
-    if not ready then return false end
-
-    TriggerLatentClientEvent('whey_crafting:client:setProps', source, TYPES_BYTES_PER_SECOND, getPropList())
-
-    return true
 end)
 
 lib.callback.register('whey_crafting:server:saveTable', function(source, coords, heading)
@@ -770,7 +779,16 @@ lib.callback.register('whey_crafting:server:saveTable', function(source, coords,
 
     local id = MySQL.insert.await(
         db.queries.insertTable,
-        { coords.x, coords.y, coords.z, heading, pending.type, json.encode(pending.gangs), player.PlayerData.citizenid }
+        {
+            coords.x,
+            coords.y,
+            coords.z,
+            heading,
+            pending.type,
+            json.encode(pending.gangs),
+            player.PlayerData.citizenid,
+            pending.model,
+        }
     )
 
     if not id then
@@ -779,7 +797,15 @@ lib.callback.register('whey_crafting:server:saveTable', function(source, coords,
 
     pendingPlacement[source] = nil
 
-    local craftTable = { id = id, coords = coords, heading = heading, type = pending.type, gangs = pending.gangs }
+    local craftTable = {
+        id = id,
+        coords = coords,
+        heading = heading,
+        type = pending.type,
+        gangs = pending.gangs,
+        model = pending.model,
+    }
+
     tables[id] = craftTable
     syncTable(craftTable)
 
@@ -800,7 +826,7 @@ local function manageData()
         return false, STARTING_UP
     end
 
-    local typeList, tableList, propList = {}, {}, {}
+    local typeList, tableList = {}, {}
 
     for name, tableType in pairs(types) do
         typeList[#typeList + 1] = { name = name, label = tableType.label, categories = tableType.categories }
@@ -825,25 +851,13 @@ local function manageData()
             coords = { x = coords.x, y = coords.y, z = coords.z },
             heading = craftTable.heading,
             gangs = craftTable.gangs,
+            model = craftTable.model,
         }
     end
 
     table.sort(tableList, function(a, b) return a.id < b.id end)
 
-    for _, prop in pairs(props) do
-        local coords = prop.coords
-
-        propList[#propList + 1] = {
-            id = prop.id,
-            model = prop.model,
-            coords = { x = coords.x, y = coords.y, z = coords.z },
-            heading = prop.heading,
-        }
-    end
-
-    table.sort(propList, function(a, b) return a.id < b.id end)
-
-    return true, { types = typeList, tables = tableList, props = propList }
+    return true, { types = typeList, tables = tableList }
 end
 
 local function saveType(name, data, isNew)
@@ -919,7 +933,7 @@ local function deleteType(name)
     return true, removed
 end
 
-local function startPlacement(playerId, typeName, gangs)
+local function startPlacement(playerId, typeName, gangs, model)
     if not ready then
         return false, STARTING_UP
     end
@@ -940,8 +954,12 @@ local function startPlacement(playerId, typeName, gangs)
         return false, err
     end
 
-    pendingPlacement[playerId] = { type = typeName, gangs = lock }
-    TriggerClientEvent('whey_crafting:client:startPlacement', playerId)
+    if model ~= nil and not isBenchModel(model) then
+        return false, locale('bench_model_unknown')
+    end
+
+    pendingPlacement[playerId] = { type = typeName, gangs = lock, model = model }
+    TriggerClientEvent('whey_crafting:client:startPlacement', playerId, model)
 
     return true
 end
@@ -957,11 +975,19 @@ local function updateTable(id, changes)
         return false, locale('bench_gone')
     end
 
-    if type(changes) ~= 'table' or (changes.type == nil and changes.gangs == nil) then
+    if type(changes) ~= 'table' or (changes.type == nil and changes.gangs == nil and changes.model == nil) then
         return false, locale('nothing_to_change')
     end
 
-    local newType, newGangs = craftTable.type, craftTable.gangs
+    local newType, newGangs, newModel = craftTable.type, craftTable.gangs, craftTable.model
+
+    if changes.model ~= nil then
+        if not isBenchModel(changes.model) then
+            return false, locale('bench_model_unknown')
+        end
+
+        newModel = changes.model
+    end
 
     if changes.type ~= nil then
         if type(changes.type) ~= 'string' or not types[changes.type] then
@@ -980,7 +1006,7 @@ local function updateTable(id, changes)
         end
     end
 
-    MySQL.update.await(db.queries.updateTable, { newType, json.encode(newGangs), craftTable.id })
+    MySQL.update.await(db.queries.updateTable, { newType, json.encode(newGangs), newModel, craftTable.id })
 
     if tables[craftTable.id] ~= craftTable then
         return false, locale('bench_removed_meanwhile')
@@ -988,6 +1014,7 @@ local function updateTable(id, changes)
 
     craftTable.type = newType
     craftTable.gangs = newGangs
+    craftTable.model = newModel
     syncTable(craftTable)
 
     return true
@@ -1011,137 +1038,6 @@ local function removeBench(id)
 
     return true
 end
-
-local function removeProp(id)
-    local removed = MySQL.update.await(db.queries.deleteProp, { id }) == 1
-
-    if props[id] then
-        props[id] = nil
-        propCount -= 1
-    end
-
-    TriggerClientEvent('whey_crafting:client:removeProp', -1, id)
-    markDirty()
-
-    return removed
-end
-
-local function startPropPlacement(playerId, model)
-    if not ready then
-        return false, STARTING_UP
-    end
-
-    playerId = tonumber(playerId)
-
-    if not playerId or not GetPlayerName(playerId) then
-        return false, locale('player_offline')
-    end
-
-    if type(model) ~= 'string' or #model > limits.model or not model:find(MODEL_PATTERN) then
-        return false, locale('invalid_model')
-    end
-
-    if propCount >= limits.props then
-        return false, locale('too_many_props', limits.props)
-    end
-
-    model = model:lower()
-    pendingProps[playerId] = { model = model, placed = {} }
-    TriggerClientEvent('whey_crafting:client:startPropPlacement', playerId, model)
-
-    return true
-end
-
-local function deleteProp(id)
-    if not ready then
-        return false, STARTING_UP
-    end
-
-    if type(id) ~= 'number' or not props[id] then
-        return false, locale('prop_gone')
-    end
-
-    if not removeProp(id) then
-        return false, locale('prop_already_removed')
-    end
-
-    return true
-end
-
-lib.callback.register('whey_crafting:server:saveProp', function(source, coords, heading)
-    if not ready then
-        return false, STARTING_UP
-    end
-
-    local pending = pendingProps[source]
-
-    if not pending then
-        return false, locale('prop_placement_not_started')
-    end
-
-    if type(coords) ~= 'vector3' or type(heading) ~= 'number' or heading ~= heading then
-        return false, locale('invalid_placement')
-    end
-
-    local player = exports.qbx_core:GetPlayer(source)
-
-    if not player then
-        return false, locale('player_not_loaded')
-    end
-
-    if not (#(GetEntityCoords(GetPlayerPed(source)) - coords) <= stations.placement.maxDistance + 6.0) then
-        return false, locale('too_far')
-    end
-
-    if propCount >= limits.props then
-        return false, locale('too_many_props', limits.props)
-    end
-
-    heading = heading % 360
-
-    propCount += 1
-
-    local ok, id = pcall(
-        MySQL.insert.await,
-        db.queries.insertProp,
-        { pending.model, coords.x, coords.y, coords.z, heading, player.PlayerData.citizenid }
-    )
-
-    if not ok or not id then
-        propCount -= 1
-        lib.print.error(('could not save a %s prop: %s'):format(pending.model, id))
-
-        return false, locale('prop_save_failed')
-    end
-
-    local prop = { id = id, model = pending.model, coords = coords, heading = heading }
-
-    props[id] = prop
-    pending.placed[#pending.placed + 1] = id
-    TriggerClientEvent('whey_crafting:client:addProp', -1, prop)
-    markDirty()
-
-    return id
-end)
-
-lib.callback.register('whey_crafting:server:undoProp', function(source)
-    local pending = pendingProps[source]
-    local id = pending and table.remove(pending.placed)
-
-    if not id then
-        return false, locale('nothing_to_undo')
-    end
-
-    removeProp(id)
-
-    return id
-end)
-
-lib.callback.register('whey_crafting:server:stopProps', function(source)
-    pendingProps[source] = nil
-
-    return true
-end)
 
 local function getQueue(playerId, tableId)
     if not ready then
@@ -1220,6 +1116,12 @@ local function cooldownView(citizenid, typeName)
     end
 
     return view
+end
+
+local function levelView(citizenid)
+    if not levels.enabled then return end
+
+    return levels.view(citizenid)
 end
 
 local function findEntry(queue, entryId)
@@ -1344,7 +1246,7 @@ local function queueAction(name, action)
             return false, refused
         end
 
-        return queueView(queue), cooldownView(citizenid, craftTable.type)
+        return queueView(queue), cooldownView(citizenid, craftTable.type), levelView(citizenid)
     end)
 end
 
@@ -1355,7 +1257,7 @@ lib.callback.register('whey_crafting:server:getQueue', function(source, tableId)
         return false, craftTable
     end
 
-    return queueView(queue), cooldownView(citizenid, craftTable.type)
+    return queueView(queue), cooldownView(citizenid, craftTable.type), levelView(citizenid)
 end)
 
 queueAction('whey_crafting:server:craft', function(source, queue, citizenid, craftTable, recipeId, amount)
@@ -1363,6 +1265,10 @@ queueAction('whey_crafting:server:craft', function(source, queue, citizenid, cra
 
     if not recipe or math.type(amount) ~= 'integer' or amount < 1 then
         return locale('invalid_recipe')
+    end
+
+    if levels.enabled and recipe.level and levels.level(citizenid) < recipe.level then
+        return locale('level_too_low', recipe.level)
     end
 
     if #queue >= config.queueSize then
@@ -1414,6 +1320,7 @@ queueAction('whey_crafting:server:craft', function(source, queue, citizenid, cra
         readyAt = math.max(now, last and last.readyAt or 0) + duration,
         ingredients = taken,
         cooldownStart = rule and (cooldown and cooldown.startedAt or now) or 0,
+        xp = levels.enabled and math.min((recipe.xp or levels.defaultXp) * amount, MAX_ORDER_XP) or 0,
     }
 
     local ok, id = pcall(MySQL.insert.await, db.queries.insertOrder, {
@@ -1426,6 +1333,7 @@ queueAction('whey_crafting:server:craft', function(source, queue, citizenid, cra
         entry.readyAt,
         json.encode(entry.ingredients),
         entry.cooldownStart,
+        entry.xp,
     })
 
     if not ok or not id then
@@ -1453,6 +1361,7 @@ queueAction('whey_crafting:server:craft', function(source, queue, citizenid, cra
         count = entry.count,
         duration = entry.duration,
         materials = itemSummary(taken),
+        xp = entry.xp,
     })
 end)
 
@@ -1478,10 +1387,11 @@ queueAction('whey_crafting:server:collect', function(source, queue, citizenid, c
     end
 
     local left = entry.count - given
+    local earned = left > 0 and entry.xp * given // entry.count or entry.xp
     local ok, err
 
     if left > 0 then
-        ok, err = pcall(MySQL.update.await, db.queries.setOrderCount, { left, entry.id })
+        ok, err = pcall(MySQL.update.await, db.queries.setOrderCount, { left, entry.xp - earned, entry.id })
     else
         ok, err = pcall(MySQL.update.await, db.queries.deleteOrder, { entry.id })
     end
@@ -1495,6 +1405,7 @@ queueAction('whey_crafting:server:collect', function(source, queue, citizenid, c
 
     if left > 0 then
         entry.count = left
+        entry.xp -= earned
 
         TriggerClientEvent('ox_lib:notify', source, {
             type = 'inform',
@@ -1502,6 +1413,15 @@ queueAction('whey_crafting:server:collect', function(source, queue, citizenid, c
         })
     else
         table.remove(queue, index)
+    end
+
+    local reached = levels.enabled and earned > 0 and levels.add(citizenid, earned)
+
+    if reached then
+        TriggerClientEvent('ox_lib:notify', source, {
+            type = 'success',
+            description = locale('level_up', reached),
+        })
     end
 
     saveInventory(source)
@@ -1514,6 +1434,8 @@ queueAction('whey_crafting:server:collect', function(source, queue, citizenid, c
         item = entry.item,
         count = given,
         left = left,
+        xp = earned,
+        levelReached = reached or nil,
     })
 end)
 
@@ -1588,6 +1510,7 @@ local function managePayload()
     if not ok then return end
 
     data.gangs = gangOptions()
+    data.models = benchModels
 
     return data
 end
@@ -1648,7 +1571,7 @@ function actions.deleteType(source, payload)
 end
 
 function actions.place(source, payload)
-    local ok, err = startPlacement(source, payload.type, payload.gangs)
+    local ok, err = startPlacement(source, payload.type, payload.gangs, payload.model)
 
     if not ok then
         return false, err
@@ -1660,7 +1583,7 @@ function actions.place(source, payload)
 end
 
 function actions.updateTable(source, payload)
-    local ok, err = updateTable(payload.id, { type = payload.type, gangs = payload.gangs })
+    local ok, err = updateTable(payload.id, { type = payload.type, gangs = payload.gangs, model = payload.model })
 
     if not ok then
         return false, err
@@ -1695,40 +1618,106 @@ function actions.teleport(source, payload)
     return true, locale('teleported_bench', craftTable.id)
 end
 
-function actions.placeProp(source, payload)
-    local ok, err = startPropPlacement(source, payload.model)
+local function characterEntry(row)
+    local ok, charinfo = pcall(json.decode, row.charinfo or '')
 
-    if not ok then
-        return false, err
+    if not ok or type(charinfo) ~= 'table' then
+        charinfo = {}
     end
 
-    TriggerClientEvent('whey_crafting:client:closeTablet', source)
+    local entry = levels.view(row.citizenid)
+    local name = ('%s %s'):format(charinfo.firstname or '', charinfo.lastname or ''):match('^%s*(.-)%s*$')
 
-    return true, locale('prop_place_started')
+    entry.citizenid = row.citizenid
+    entry.name = name ~= '' and name or row.citizenid
+
+    return entry
 end
 
-function actions.deleteProp(source, payload)
-    local ok, err = deleteProp(payload.id)
+local function findCharacter(citizenid)
+    if type(citizenid) ~= 'string' or #citizenid > limits.key then return end
 
-    if not ok then
-        return false, err
-    end
+    if not citizenid:find(CITIZENID_PATTERN) then return end
 
-    log('Prop removed', { player = source, propId = payload.id })
+    local row = MySQL.single.await(db.queries.findCharacter, { citizenid })
 
-    return true, locale('prop_deleted', payload.id), managePayload()
+    return row and characterEntry(row)
 end
 
-function actions.teleportProp(source, payload)
-    local prop = type(payload.id) == 'number' and props[payload.id]
+local function searchCharacters(term)
+    local discord = term:match('^discord:(%d+)$') or (#term >= DISCORD_ID_LENGTH and term:match('^%d+$'))
+    local rows
 
-    if not prop then
-        return false, locale('prop_gone')
+    if discord then
+        local ok, found = pcall(
+            MySQL.query.await,
+            db.queries.searchDiscord,
+            { discord, 'discord:' .. discord, SEARCH_LIMIT }
+        )
+
+        rows = ok and found or {}
+    else
+        local escaped = term:lower():gsub('[\\%%_]', '\\%0')
+
+        rows = MySQL.query.await(db.queries.searchCharacters, { term, ('%%%s%%'):format(escaped), SEARCH_LIMIT })
     end
 
-    teleport(source, prop.coords, prop.heading)
+    local list = {}
 
-    return true, locale('teleported_prop', prop.id)
+    for i = 1, #rows do
+        list[i] = characterEntry(rows[i])
+    end
+
+    return list
+end
+
+function actions.searchLevels(_, payload)
+    if not levels.enabled then
+        return false, locale('levels_disabled')
+    end
+
+    local term = type(payload.term) == 'string' and payload.term:match('^%s*(.-)%s*$')
+
+    if not term or #term < SEARCH_MIN_LENGTH or #term > limits.key then
+        return false, locale('search_too_short', SEARCH_MIN_LENGTH)
+    end
+
+    return true, nil, searchCharacters(term)
+end
+
+function actions.setLevel(source, payload)
+    if not levels.enabled then
+        return false, locale('levels_disabled')
+    end
+
+    local level = wholeNumber(payload.level, 1, levels.maxLevel)
+
+    if not level then
+        return false, locale('level_range', levels.maxLevel)
+    end
+
+    local entry = findCharacter(payload.citizenid)
+
+    if not entry then
+        return false, locale('character_unknown')
+    end
+
+    levels.set(entry.citizenid, level)
+    log('Crafting level set', {
+        player = source,
+        by = GetPlayerName(source),
+        citizenid = entry.citizenid,
+        name = entry.name,
+        from = entry.level,
+        to = level,
+    })
+
+    local updated = levels.view(entry.citizenid)
+
+    updated.citizenid = entry.citizenid
+    updated.name = entry.name
+
+    return true, locale('level_set', entry.name, level), updated
 end
 
 lib.callback.register('whey_crafting:server:openTablet', function(source)
@@ -1780,5 +1769,4 @@ end
 AddEventHandler('playerDropped', function()
     viewers[source] = nil
     pendingPlacement[source] = nil
-    pendingProps[source] = nil
 end)

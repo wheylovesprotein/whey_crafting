@@ -1,12 +1,15 @@
 return {
-    -- Prop used for crafting benches.
-    model = `gr_prop_gr_bench_04b`,
+    -- Props a crafting bench can use. Staff pick one in the tablet when they place a bench, and can change it later.
+    -- The first one is the default, and is what benches placed before this option existed use.
+    -- The banner, stand position and camera further down are shared by every prop, so pick props of a similar size.
+    models = {
+        { model = 'gr_prop_gr_bench_04b', label = 'Workbench' },
+        { model = 'gr_prop_gr_bench_04a', label = 'Workbench (empty)' },
+        { model = 'gr_prop_gr_bench_03a', label = 'Weapon bench' },
+    },
 
     -- Benches spawn when you come within this many metres and despawn when you leave.
     renderDistance = 50.0,
-
-    -- Props placed from the tablet spawn when you come within this many metres and despawn when you leave.
-    propRenderDistance = 100.0,
 
     placement = {
         maxDistance = 8.0,    -- how far from you a bench can be placed

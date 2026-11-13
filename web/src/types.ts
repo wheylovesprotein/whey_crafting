@@ -14,6 +14,8 @@ export interface CraftingRecipe {
   duration: number;
   blueprint?: string | null;
   cooldown?: CraftingCooldown | null;
+  xp?: number | null;
+  level?: number | null;
   ingredients: CraftingIngredient[];
 }
 
@@ -40,13 +42,12 @@ export interface CraftingBench {
   coords: Vec3;
   heading: number;
   gangs: string[];
+  model?: string | null;
 }
 
-export interface CraftingProp {
-  id: number;
+export interface BenchModel {
   model: string;
-  coords: Vec3;
-  heading: number;
+  label: string;
 }
 
 export interface GangOption {
@@ -57,8 +58,16 @@ export interface GangOption {
 export interface CraftingData {
   types: CraftingType[];
   tables: CraftingBench[];
-  props: CraftingProp[];
   gangs: GangOption[];
+  models: BenchModel[];
+}
+
+export interface LevelEntry {
+  citizenid: string;
+  name: string;
+  level: number;
+  xp: number;
+  next: number;
 }
 
 export interface InventoryItem {

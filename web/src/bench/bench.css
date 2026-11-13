@@ -124,6 +124,49 @@ body {
   border-radius: 999px;
 }
 
+#bench .bench-tools {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+#bench .bench-level {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--card);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+}
+
+#bench .level-name {
+  color: #b6f7cf;
+}
+
+#bench .level-bar {
+  width: 6.5rem;
+  height: 0.3rem;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+#bench .level-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+#bench .level-xp {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
 #bench .bench-key {
   padding: 0.3rem 0.65rem;
   font-size: 0.72rem;
@@ -240,10 +283,28 @@ body {
 }
 
 #bench .row-name {
+  flex: 1;
+  min-width: 0;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+#bench .row.is-locked .thumb,
+#bench .row.is-locked .row-name {
+  opacity: 0.5;
+}
+
+#bench .row-lock {
+  flex: none;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--card-2);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
 }
 
 #bench .thumb {
@@ -318,6 +379,12 @@ body {
   background: var(--card-2);
   border: 1px solid var(--line-2);
   border-radius: 999px;
+}
+
+#bench .xp-pill {
+  color: #b6f7cf;
+  background: var(--accent-soft);
+  border-color: rgba(31, 227, 106, 0.45);
 }
 
 #bench .time-pill svg {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type SyntheticEvent } from 'react';
 import { locale } from '../locale';
 import { itemImage, nui } from '../nui';
-import { arr } from '../util';
+import { arr, cls } from '../util';
 import { renderBanners, type BannerType } from './banner';
 
 interface BenchItem {
@@ -16,6 +16,8 @@ interface BenchRecipe extends BenchItem {
   duration: number;
   ingredients: BenchItem[];
   blueprint?: BenchItem;
+  xp?: number;
+  level?: number;
 }
 
 interface BenchCategory {
@@ -36,8 +38,15 @@ interface CooldownView {
   left?: number;
 }
 
+interface LevelView {
+  level: number;
+  xp: number;
+  next: number;
+}
+
 interface ActionResult {
   queue: unknown;
+  level?: LevelView | null;
   cooldowns?: Record<string, CooldownView>;
   counts?: Record<string, number>;
 }
@@ -242,6 +251,7 @@ export default function Bench() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [cooldowns, setCooldowns] = useState<Record<string, Cooldown>>({});
+  const [level, setLevel] = useState<LevelView | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [amount, setAmount] = useState(1);
   const [busy, setBusy] = useState(false);
@@ -258,6 +268,7 @@ export default function Bench() {
     }
 
     setCooldowns(toCooldowns(result.cooldowns, at));
+    setLevel(result.level ?? null);
     setQueue(toQueue(result.queue, at));
     setNow(at);
   }, []);
@@ -318,6 +329,7 @@ export default function Bench() {
 
   const recipe = useMemo(() => (selected && menu ? menu.recipes.get(selected) : undefined), [menu, selected]);
   const owned = (name: string) => counts[name] ?? 0;
+  const isLocked = (target: BenchRecipe) => level !== null && (target.level ?? 1) > level.level;
 
   const cooldownWait = (name: string) => {
     const cooldown = cooldowns[name];
@@ -386,14 +398,17 @@ export default function Bench() {
     const tooHeavy = max < 1;
     const hasBlueprint = !recipe.blueprint || owned(recipe.blueprint.name) >= 1;
     const hasMaterials = recipe.ingredients.every((item) => owned(item.name) >= item.count * amount);
+    const locked = isLocked(recipe);
 
-    const label = onCooldown
-      ? locale('ui_on_cooldown')
-      : queueFull
-        ? locale('ui_queue_full')
-        : tooHeavy
-          ? locale('ui_too_heavy')
-          : locale('ui_craft');
+    const label = locked
+      ? locale('ui_requires_level', recipe.level ?? 1)
+      : onCooldown
+        ? locale('ui_on_cooldown')
+        : queueFull
+          ? locale('ui_queue_full')
+          : tooHeavy
+            ? locale('ui_too_heavy')
+            : locale('ui_craft');
 
     const commit = (next: number) => setAmount(Math.min(max, Math.max(1, next)));
 
@@ -405,6 +420,11 @@ export default function Bench() {
             <h2>{recipe.label}</h2>
             <p>{locale('ui_item_count', (recipe.count * amount).toLocaleString(), recipe.label)}</p>
           </div>
+          {level && (recipe.xp ?? 0) > 0 && (
+            <span className="time-pill xp-pill">
+              {locale('ui_xp_gain', ((recipe.xp ?? 0) * amount).toLocaleString())}
+            </span>
+          )}
           <span className="time-pill">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
               <circle cx="8" cy="8" r="6.2" />
@@ -438,7 +458,7 @@ export default function Bench() {
           {onCooldown && <span className="wait">{locale('ui_craft_again_in', formatWait(wait))}</span>}
           <button
             className="craft-btn"
-            disabled={busy || onCooldown || queueFull || tooHeavy || !hasBlueprint || !hasMaterials}
+            disabled={busy || locked || onCooldown || queueFull || tooHeavy || !hasBlueprint || !hasMaterials}
             onClick={() => act('craft', { recipe: recipe.name, amount })}
           >
             {label}
@@ -458,9 +478,24 @@ export default function Bench() {
             <h1>{locale('ui_crafting')}</h1>
             <span className="bench-type">{menu?.title}</span>
           </div>
-          <button className="bench-key" onClick={close}>
-            {locale('ui_esc')}
-          </button>
+          <div className="bench-tools">
+            {level && (
+              <div className="bench-level">
+                <span className="level-name">{locale('ui_level_n', level.level)}</span>
+                <span className="level-bar">
+                  <i style={{ width: `${level.next > 0 ? Math.min(100, (level.xp / level.next) * 100) : 100}%` }} />
+                </span>
+                <span className="level-xp">
+                  {level.next > 0
+                    ? locale('ui_xp_progress', level.xp.toLocaleString(), level.next.toLocaleString())
+                    : locale('ui_max_level')}
+                </span>
+              </div>
+            )}
+            <button className="bench-key" onClick={close}>
+              {locale('ui_esc')}
+            </button>
+          </div>
         </header>
         <div className="bench-body">
           <aside className="bench-list">
@@ -475,11 +510,14 @@ export default function Bench() {
                   {category.recipes.map((entry) => (
                     <button
                       key={entry.name}
-                      className={entry.name === selected ? 'row is-active' : 'row'}
+                      className={cls('row', entry.name === selected && 'is-active', isLocked(entry) && 'is-locked')}
                       onClick={() => select(entry.name)}
                     >
                       <Thumb src={entry.image} />
                       <span className="row-name">{entry.label}</span>
+                      {isLocked(entry) && (
+                        <span className="row-lock">{locale('ui_level_short', entry.level ?? 1)}</span>
+                      )}
                     </button>
                   ))}
                 </div>

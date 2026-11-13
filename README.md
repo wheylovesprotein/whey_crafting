@@ -42,10 +42,6 @@ Changing the type or gang lock of a bench that is already placed.
 
 ![The edit bench dialog](docs/tablet-edit-bench.png)
 
-Decorative props, listed by model and by distance from you.
-
-![The props screen](docs/tablet-props.png)
-
 ## Features
 
 - **Crafting benches** placed anywhere in the world, each with a banner on the bench top and a camera view while you craft.
@@ -55,8 +51,8 @@ Decorative props, listed by model and by distance from you.
 - **Cancel with refund.** Cancelling an unfinished craft gives the materials back.
 - **Blueprints.** A recipe can need an item that is checked but not used up.
 - **Craft cooldowns.** Limit a recipe to a number of crafts, followed by a wait in hours, per character.
+- **Crafting levels.** Players earn XP when they collect a craft and level up. Each recipe can give its own XP and need a level, the bench shows the player's level and progress, and staff can set anyone's level from the tablet.
 - **Gang locked benches.** Lock any bench to one or more Qbox gangs.
-- **Props.** Place decorative props from the tablet to dress up a crafting area.
 - **Server side checks on everything.** Items, amounts, weight, distance to the bench, gang locks and permissions are all checked on the server.
 - **Every text in one file.** All notifications, errors and interface text are in `locales/en.json`.
 
@@ -161,9 +157,9 @@ All settings are in the `config` folder. Every option has a comment next to it.
 
 | File | What is in it |
 |---|---|
-| `config/general.lua` | Debug prints, version check, the tablet command and keybind, queue size, the weight limit for one craft. |
+| `config/general.lua` | Debug prints, version check, the tablet command and keybind, queue size, the weight limit for one craft, and the crafting levels (on or off, highest level, XP needed per level). |
 | `config/permissions.lua` | Who can use the tablet. |
-| `config/stations.lua` | Bench prop, render distances, placement controls, the interaction key or ox_target, the banner, the stand position, animation and camera. |
+| `config/stations.lua` | The bench props staff can pick from, render distance, placement controls, the interaction key or ox_target, the banner, the stand position, animation and camera. |
 | `config/logs.lua` | A function called for every craft, collect, cancel and tablet change. Send it to your own log system. Empty by default. |
 
 ### Languages
@@ -183,16 +179,19 @@ This is the ox_lib language setting, so it changes every ox resource on the serv
 1. Open the tablet with `/crafttablet`, the keybind, or the item.
 2. Press **New type** and give it a key and a label.
 3. Add a category, then add recipes to it. Pick the result item, the amount, the craft time and the ingredients.
-4. Press the **+** next to **Placed benches** to place a bench of that type. Aim with the mouse, scroll to rotate, Enter to place.
+4. Press the **+** next to **Placed benches** to place a bench of that type. Pick the prop it uses (the list is `models` in `config/stations.lua`), then aim with the mouse, scroll to rotate, Enter to place. The pencil next to a placed bench changes its prop later.
 5. Remove a bench with the bin icon next to it in the same list.
+6. Open **Levels** in the left list and search for a player by character name, citizen ID or Discord ID. It finds offline players too. Pick one, type a level and press **Set level**.
+
+In the recipe editor, **XP per craft** is what one craft of that recipe gives (leave it empty for the default from `config/general.lua`) and **Required level** stops lower level players from crafting it.
 
 **Players**
 
-Walk up to a bench and press **E** (or use ox_target). Pick a recipe, choose an amount and press **Craft**. The materials are taken and the craft joins your queue. Collect it from the queue when the timer ends.
+Walk up to a bench and press **E** (or use ox_target). Pick a recipe, choose an amount and press **Craft**. The materials are taken and the craft joins your queue. Collect it from the queue when the timer ends. Collecting is what gives the crafting XP, and your level and progress are shown at the top of the bench menu.
 
 ## Database
 
-The resource creates five tables on first start: `whey_crafting_tables`, `whey_crafting_types`, `whey_crafting_cooldowns`, `whey_crafting_queue` and `whey_crafting_props`. Every SQL statement the resource runs is in `server/db.lua` with a comment explaining it.
+The resource creates five tables on first start: `whey_crafting_tables`, `whey_crafting_types`, `whey_crafting_cooldowns`, `whey_crafting_queue` and `whey_crafting_levels`. Columns added by an update are added to existing tables on the next start. Every SQL statement the resource runs is in `server/db.lua` with a comment explaining it.
 
 ## Editing the interface
 

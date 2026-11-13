@@ -12,8 +12,14 @@ export interface Limits {
   ingredientCount: number;
   cooldownLimit: number;
   cooldownHours: number;
-  model: number;
-  props: number;
+  xp: number;
+  level: number;
+}
+
+interface LevelConfig {
+  enabled: boolean;
+  maxLevel: number;
+  defaultXp: number;
 }
 
 interface Init {
@@ -21,6 +27,7 @@ interface Init {
   limits: Limits;
   key: string;
   showKey: boolean;
+  levels?: LevelConfig;
 }
 
 export const limits: Limits = {
@@ -34,11 +41,13 @@ export const limits: Limits = {
   ingredientCount: 1000000,
   cooldownLimit: 10000,
   cooldownHours: 720,
-  model: 64,
-  props: 5000,
+  xp: 100000,
+  level: 1000,
 };
 
 export const interact = { key: 'E', showKey: true };
+
+export const levelConfig: LevelConfig = { enabled: false, maxLevel: 1, defaultXp: 0 };
 
 const RETRY_MS = 1000;
 
@@ -51,6 +60,7 @@ export async function loadInit(): Promise<void> {
       Object.assign(limits, init.limits);
       interact.key = init.key;
       interact.showKey = init.showKey;
+      Object.assign(levelConfig, init.levels);
 
       return;
     }

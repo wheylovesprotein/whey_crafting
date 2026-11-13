@@ -3,27 +3,23 @@ lib.locale()
 local config = require 'config.general'
 local stations = require 'config.stations'
 local limits = require 'shared.limits'
+local levelSettings = config.levels or {}
+local benchModels = stations.models or {}
+local defaultModel = benchModels[1] and benchModels[1].model or stations.model or 'gr_prop_gr_bench_04b'
 
 local CONTROL_CONFIRM = 191
 local CONTROL_CANCEL = 194
 local CONTROL_ROTATE_LEFT = 241
 local CONTROL_ROTATE_RIGHT = 242
 local CONTROL_FINE_ROTATE = 21
-local CONTROL_RAISE = 10
-local CONTROL_LOWER = 11
-local CONTROL_UNDO = 178
-local DISABLED_CONTROLS = { 10, 11, 14, 15, 16, 17, 24, 25, 37, 140, 141, 142, 178, 257, 263 }
+local DISABLED_CONTROLS = { 14, 15, 16, 17, 24, 25, 37, 140, 141, 142, 257, 263 }
 local RAY_WORLD = 1
-local RAY_WORLD_AND_OBJECTS = 17
-local RAISE_METRES_PER_SECOND = 0.5
-local MAX_RAISE = 4.0
 local BANNER_TXD = 'whey_crafting'
 
 local placement
 local session
 local types = {}
 local tables = {}
-local props = {}
 local menus = {}
 local banners = {}
 local bannerLabels = {}
@@ -87,6 +83,11 @@ RegisterNUICallback('ready', function(_, cb)
         limits = limits,
         key = stations.interaction.keyLabel,
         showKey = not stations.interaction.target,
+        levels = {
+            enabled = levelSettings.enabled == true,
+            maxLevel = levelSettings.maxLevel or 1,
+            defaultXp = levelSettings.defaultXp or 0,
+        },
     })
 end)
 
@@ -231,6 +232,11 @@ local function getMenu(typeName)
             entry.duration = recipe.duration
             entry.ingredients = {}
 
+            if levelSettings.enabled then
+                entry.xp = recipe.xp or levelSettings.defaultXp or 0
+                entry.level = recipe.level
+            end
+
             for k, ingredient in ipairs(recipe.ingredients) do
                 local data = itemData(ingredient.item)
                 data.count = ingredient.count
@@ -298,7 +304,7 @@ local function openCrafting(craftTable)
     local current = { tableId = craftTable.tableId, menu = menu }
     session = current
 
-    local queue, cooldowns = lib.callback.await('whey_crafting:server:getQueue', false, current.tableId)
+    local queue, cooldowns, level = lib.callback.await('whey_crafting:server:getQueue', false, current.tableId)
 
     if session ~= current then return end
 
@@ -350,6 +356,7 @@ local function openCrafting(craftTable)
         counts = getCounts(current.menu),
         queue = queue,
         cooldowns = cooldowns,
+        level = level,
         maxWeight = config.maxCraftWeight,
         queueSize = config.queueSize,
     })
@@ -380,7 +387,7 @@ RegisterNUICallback('craft', function(data, cb)
         return cb(false)
     end
 
-    local queue, cooldowns = lib.callback.await(
+    local queue, cooldowns, level = lib.callback.await(
         'whey_crafting:server:craft',
         false,
         current.tableId,
@@ -393,7 +400,7 @@ RegisterNUICallback('craft', function(data, cb)
         return cb(false)
     end
 
-    cb({ queue = queue, cooldowns = cooldowns, counts = getCounts(current.menu) })
+    cb({ queue = queue, cooldowns = cooldowns, level = level, counts = getCounts(current.menu) })
 end)
 
 RegisterNUICallback('collect', function(data, cb)
@@ -403,14 +410,14 @@ RegisterNUICallback('collect', function(data, cb)
         return cb(false)
     end
 
-    local queue, cooldowns = lib.callback.await('whey_crafting:server:collect', false, current.tableId, data.id)
+    local queue, cooldowns, level = lib.callback.await('whey_crafting:server:collect', false, current.tableId, data.id)
 
     if not queue then
         lib.notify({ type = 'error', description = cooldowns or locale('collect_refused') })
         return cb(false)
     end
 
-    cb({ queue = queue, cooldowns = cooldowns, counts = getCounts(current.menu) })
+    cb({ queue = queue, cooldowns = cooldowns, level = level, counts = getCounts(current.menu) })
 end)
 
 RegisterNUICallback('cancel', function(data, cb)
@@ -420,14 +427,14 @@ RegisterNUICallback('cancel', function(data, cb)
         return cb(false)
     end
 
-    local queue, cooldowns = lib.callback.await('whey_crafting:server:cancel', false, current.tableId, data.id)
+    local queue, cooldowns, level = lib.callback.await('whey_crafting:server:cancel', false, current.tableId, data.id)
 
     if not queue then
         lib.notify({ type = 'error', description = cooldowns or locale('cancel_refused') })
         return cb(false)
     end
 
-    cb({ queue = queue, cooldowns = cooldowns, counts = getCounts(current.menu) })
+    cb({ queue = queue, cooldowns = cooldowns, level = level, counts = getCounts(current.menu) })
 end)
 
 local function deletePointProp(point)
@@ -439,8 +446,16 @@ local function deletePointProp(point)
     point.loading = nil
 end
 
+local function benchModel(name)
+    if name and IsModelInCdimage(joaat(name)) then
+        return name
+    end
+
+    return defaultModel
+end
+
 local function createProp(coords, heading, name)
-    local model = lib.requestModel(name or stations.model)
+    local model = lib.requestModel(name or defaultModel)
     local entity = CreateObjectNoOffset(model, coords.x, coords.y, coords.z, false, false, false)
     SetModelAsNoLongerNeeded(model)
     SetEntityHeading(entity, heading)
@@ -495,7 +510,7 @@ local function addTable(craftTable)
             self.loading = token
 
             CreateThread(function()
-                local entity = createProp(self.coords, self.heading)
+                local entity = createProp(self.coords, self.heading, benchModel(craftTable.model))
 
                 if self.loading ~= token or tables[craftTable.id] ~= entry then
                     DeleteEntity(entity)
@@ -580,72 +595,6 @@ local function setTables(list)
     end
 end
 
-local function removePlacedProp(id)
-    local point = props[id]
-
-    if not point then return end
-
-    point:remove()
-    deletePointProp(point)
-    props[id] = nil
-end
-
-local function waitForInterior(point, token)
-    local coords = point.coords
-    local interior = GetInteriorAtCoords(coords.x, coords.y, coords.z)
-
-    if interior == 0 then return end
-
-    while point.loading == token and not IsInteriorReady(interior) do
-        Wait(250)
-    end
-end
-
-local function addPlacedProp(prop)
-    removePlacedProp(prop.id)
-
-    if not IsModelInCdimage(joaat(prop.model)) then
-        return lib.print.warn(('prop #%d uses "%s", which is not a model in the game'):format(prop.id, prop.model))
-    end
-
-    props[prop.id] = lib.points.new({
-        coords = prop.coords,
-        distance = stations.propRenderDistance,
-        heading = prop.heading,
-        model = prop.model,
-        onEnter = function(self)
-            local token = {}
-            self.loading = token
-
-            CreateThread(function()
-                waitForInterior(self, token)
-
-                if self.loading ~= token then return end
-
-                local entity = createProp(self.coords, self.heading, self.model)
-
-                if self.loading ~= token then
-                    DeleteEntity(entity)
-                    return
-                end
-
-                self.entity = entity
-            end)
-        end,
-        onExit = deletePointProp,
-    })
-end
-
-local function setPlacedProps(list)
-    for id in pairs(props) do
-        removePlacedProp(id)
-    end
-
-    for i = 1, #list do
-        addPlacedProp(list[i])
-    end
-end
-
 local function startProbe()
     local camCoords = GetFinalRenderedCamCoord()
     local rot = GetFinalRenderedCamRot(2)
@@ -703,46 +652,6 @@ local function confirmPlacement()
     end
 end
 
-local function saveProp(coords, heading)
-    CreateThread(function()
-        local id, err = lib.callback.await('whey_crafting:server:saveProp', false, coords, heading)
-
-        if id then
-            lib.notify({ id = 'whey_crafting:prop', type = 'success', description = locale('prop_saved', id) })
-        else
-            lib.notify({ type = 'error', description = err or locale('prop_save_failed') })
-        end
-    end)
-end
-
-local function undoProp()
-    CreateThread(function()
-        local id, err = lib.callback.await('whey_crafting:server:undoProp', false)
-
-        if id then
-            lib.notify({ id = 'whey_crafting:prop', type = 'inform', description = locale('prop_removed', id) })
-        else
-            lib.notify({ type = 'error', description = err or locale('undo_failed') })
-        end
-    end)
-end
-
-local function runPropControls()
-    local step = RAISE_METRES_PER_SECOND * GetFrameTime()
-
-    if IsDisabledControlPressed(0, CONTROL_RAISE) then
-        placement.raise = math.min(placement.raise + step, MAX_RAISE)
-    elseif IsDisabledControlPressed(0, CONTROL_LOWER) then
-        placement.raise = math.max(placement.raise - step, -MAX_RAISE)
-    end
-
-    if IsDisabledControlJustPressed(0, CONTROL_UNDO) then
-        undoProp()
-    end
-
-    placement.coords = placement.aim + vec3(0.0, 0.0, placement.lift + placement.raise)
-end
-
 local function runPlacement()
     local current = placement
     local probe = startProbe()
@@ -759,7 +668,6 @@ local function runPlacement()
                 local inRange = hit == 1 and #(endCoords - GetEntityCoords(cache.ped)) <= stations.placement.maxDistance
 
                 if inRange then
-                    placement.aim = endCoords
                     placement.coords = endCoords
                 end
 
@@ -767,10 +675,6 @@ local function runPlacement()
             end
 
             probe = startProbe()
-        end
-
-        if placement.isProp then
-            runPropControls()
         end
 
         local step = stations.placement.rotateStep
@@ -797,20 +701,10 @@ local function runPlacement()
         SetEntityHeading(placement.entity, placement.heading)
 
         if IsDisabledControlJustPressed(0, CONTROL_CANCEL) then
-            local wasProp = placement.isProp
-
             stopPlacement()
-
-            if wasProp then
-                lib.callback.await('whey_crafting:server:stopProps', false)
-                lib.notify({ type = 'inform', description = locale('props_finished') })
-            else
-                lib.notify({ type = 'inform', description = locale('placement_cancelled') })
-            end
+            lib.notify({ type = 'inform', description = locale('placement_cancelled') })
         elseif IsDisabledControlJustPressed(0, CONTROL_CONFIRM) then
-            if placement.valid and placement.isProp then
-                saveProp(placement.coords, placement.heading)
-            elseif placement.valid then
+            if placement.valid then
                 confirmPlacement()
             else
                 lib.notify({ type = 'error', description = locale('aim_closer') })
@@ -821,13 +715,13 @@ local function runPlacement()
     end
 end
 
-RegisterNetEvent('whey_crafting:client:startPlacement', function()
+RegisterNetEvent('whey_crafting:client:startPlacement', function(model)
     if placement or session then return end
 
     local coords = GetOffsetFromEntityInWorldCoords(cache.ped, 0.0, 1.5, -1.0)
     local step = stations.placement.rotateStep
     local heading = math.floor(GetEntityHeading(cache.ped) / step + 0.5) * step % 360
-    local entity = createProp(coords, heading)
+    local entity = createProp(coords, heading, benchModel(model))
 
     SetEntityCollision(entity, false, false)
     SetEntityAlpha(entity, 200, false)
@@ -846,53 +740,6 @@ RegisterNetEvent('whey_crafting:client:startPlacement', function()
     runPlacement()
 end)
 
-RegisterNetEvent('whey_crafting:client:startPropPlacement', function(model)
-    local problem
-
-    if (placement and not placement.isProp) or session then
-        problem = locale('finish_first')
-    elseif not IsModelInCdimage(joaat(model)) then
-        problem = locale('model_missing', model)
-    end
-
-    if problem then
-        if placement and placement.isProp then
-            stopPlacement()
-        end
-
-        lib.callback.await('whey_crafting:server:stopProps', false)
-        return lib.notify({ type = 'error', description = problem })
-    end
-
-    stopPlacement()
-
-    local coords = GetOffsetFromEntityInWorldCoords(cache.ped, 0.0, 1.5, -1.0)
-    local step = stations.placement.rotateStep
-    local heading = math.floor(GetEntityHeading(cache.ped) / step + 0.5) * step % 360
-    local entity = createProp(coords, heading, model)
-    local bottom = GetModelDimensions(joaat(model))
-
-    SetEntityCollision(entity, false, false)
-    SetEntityAlpha(entity, 200, false)
-    SetEntityDrawOutline(entity, true)
-
-    placement = {
-        entity = entity,
-        coords = coords,
-        aim = coords,
-        heading = heading,
-        ray = RAY_WORLD_AND_OBJECTS,
-        isProp = true,
-        lift = -bottom.z,
-        raise = 0.0,
-    }
-
-    setValid(false)
-
-    lib.showTextUI(locale('prop_placement_help'))
-    runPlacement()
-end)
-
 local function setTypes(list)
     types = list
     menus = {}
@@ -903,9 +750,6 @@ RegisterNetEvent('whey_crafting:client:setTypes', setTypes)
 RegisterNetEvent('whey_crafting:client:setTables', setTables)
 RegisterNetEvent('whey_crafting:client:addTable', addTable)
 RegisterNetEvent('whey_crafting:client:removeTable', removeTable)
-RegisterNetEvent('whey_crafting:client:setProps', setPlacedProps)
-RegisterNetEvent('whey_crafting:client:addProp', addPlacedProp)
-RegisterNetEvent('whey_crafting:client:removeProp', removePlacedProp)
 
 CreateThread(function()
     local list, syncedTypes = lib.callback.await('whey_crafting:server:getTables', false)
@@ -914,8 +758,6 @@ CreateThread(function()
         setTypes(syncedTypes)
         setTables(list)
     end
-
-    lib.callback.await('whey_crafting:server:getProps', false)
 end)
 
 local BLOCKED_CONTROLS = { 1, 2, 24, 25, 37, 44, 45, 140, 141, 142, 143, 199, 200, 257, 263, 264 }
@@ -1033,9 +875,5 @@ AddEventHandler('onResourceStop', function(resource)
 
     for _, entry in pairs(tables) do
         deletePointProp(entry.render)
-    end
-
-    for _, point in pairs(props) do
-        deletePointProp(point)
     end
 end)

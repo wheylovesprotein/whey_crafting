@@ -9,6 +9,6 @@ return {
     ingredientCount = 1000000,
     cooldownLimit = 10000,
     cooldownHours = 720,
-    model = 64,
-    props = 5000,
+    xp = 100000,
+    level = 1000,
 }
