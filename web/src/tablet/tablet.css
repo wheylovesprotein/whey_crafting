@@ -12,11 +12,11 @@
   --text-2: #d9d2de;
   --muted: #9a91a3;
   --faint: #675f70;
-  --accent-rgb: 47, 123, 255;
-  --accent: #2f7bff;
-  --accent-2: #1f5fd6;
-  --accent-hover: #6ea2ff;
-  --on-accent: #ffffff;
+  --accent-rgb: 31, 227, 106;
+  --accent: #1fe36a;
+  --accent-2: #18c65a;
+  --accent-hover: #64f19b;
+  --on-accent: #04140a;
   --accent-soft: rgba(var(--accent-rgb), 0.16);
   --accent-line: rgba(var(--accent-rgb), 0.55);
   --ok: #4cc38a;

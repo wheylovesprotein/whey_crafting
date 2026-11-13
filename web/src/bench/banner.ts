@@ -32,8 +32,8 @@ function drawBanner(label: string) {
 
   const fill = ctx.createLinearGradient(0, 0, WIDTH, 0);
 
-  fill.addColorStop(0, '#1f56cf');
-  fill.addColorStop(1, '#2f7bff');
+  fill.addColorStop(0, '#0c873a');
+  fill.addColorStop(1, '#18c65a');
   ctx.fillStyle = fill;
   roundedRect(ctx, 0, 0, WIDTH, HEIGHT, 10);
 
@@ -50,7 +50,7 @@ function drawBanner(label: string) {
     ctx.fillStyle = '#fff';
     roundedRect(ctx, 884, 84, 76, 76, 8);
 
-    ctx.fillStyle = '#1f56cf';
+    ctx.fillStyle = '#0c873a';
     ctx.font = '700 44px Montserrat';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
